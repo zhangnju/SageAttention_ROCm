@@ -143,19 +143,6 @@ def sageattn(
         
     arch = get_cuda_arch_versions()[q.device.index]
     if is_hip():
-        # Use optimized Triton Flash Attention for RDNA4 (gfx12xx)
-        # Falls back to rocwmma INT8/FP8 kernel for other ROCm architectures
-        if not on_gfx942():
-            # gfx11xx (RDNA3) and gfx12xx (RDNA4): use Triton FA for better throughput
-            # The Triton kernel uses FP16 QK+PV and outperforms rocwmma INT8/FP8 by 3-4x
-            try:
-                from .triton.flash_attn_rdna4 import flash_attn_triton
-                if tensor_layout == "HND" and not return_lse and q.dtype == torch.float16:
-                    if sm_scale is None:
-                        sm_scale = q.size(-1) ** -0.5
-                    return flash_attn_triton(q, k, v, sm_scale=sm_scale, is_causal=is_causal)
-            except Exception:
-                pass  # fall through to rocwmma path
         return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
     elif arch == "sm80":
         return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
