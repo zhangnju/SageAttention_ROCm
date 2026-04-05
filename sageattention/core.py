@@ -55,7 +55,7 @@ import warnings
 import subprocess
 import re
 
-from . import is_hip, on_gfx942
+from . import is_hip, on_gfx942, on_gfx950
 
 def get_cuda_version():
     try:
@@ -143,11 +143,27 @@ def sageattn(
         
     arch = get_cuda_arch_versions()[q.device.index]
     if is_hip():
-        # Use optimized Triton Flash Attention for RDNA4 (gfx12xx)
-        # Falls back to rocwmma INT8/FP8 kernel for other ROCm architectures
-        if not on_gfx942():
-            # gfx11xx (RDNA3) and gfx12xx (RDNA4): use Triton FA for better throughput
-            # The Triton kernel uses FP16 QK+PV and outperforms rocwmma INT8/FP8 by 3-4x
+        # CDNA4 (gfx950, MI355X): use CK tile Flash Attention (flash_attn_2_cuda).
+        #   rocwmma INT8/FP8 (sgattn) is not efficient on gfx950:
+        #     - The CUDA-Core QK + rocwmma PV design yields only ~67 TFLOPS
+        #     - CK tile FA achieves ~770-893 TFLOPS — 11x faster
+        #   CK tile requires flash_attn package (pip install flash-attn).
+        #   Falls back to Triton FA if flash_attn is not installed.
+        if on_gfx950():
+            try:
+                from .ck import flash_attn_ck
+                # CK path supports: HND + NHD layouts, fp16 + bf16, with/without return_lse.
+                if tensor_layout in ("HND", "NHD") and q.dtype in (torch.float16, torch.bfloat16):
+                    if sm_scale is None:
+                        sm_scale = q.size(-1) ** -0.5
+                    return flash_attn_ck(q, k, v,
+                                         tensor_layout=tensor_layout,
+                                         sm_scale=sm_scale,
+                                         is_causal=is_causal,
+                                         return_lse=return_lse)
+            except ImportError:
+                pass  # flash_attn not installed, fall through to Triton
+            # Triton fallback for gfx950 when flash_attn is unavailable
             try:
                 from .triton.flash_attn_rdna4 import flash_attn_triton
                 if tensor_layout == "HND" and not return_lse and q.dtype == torch.float16:
@@ -155,7 +171,21 @@ def sageattn(
                         sm_scale = q.size(-1) ** -0.5
                     return flash_attn_triton(q, k, v, sm_scale=sm_scale, is_causal=is_causal)
             except Exception:
-                pass  # fall through to rocwmma path
+                pass
+            return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
+        # CDNA3 (gfx942, MI300X): use INT8/FP8 rocwmma kernel (FNUZ format, wave64).
+        if on_gfx942():
+            return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
+        # RDNA4 (gfx12xx) and RDNA3 (gfx11xx): use Triton Flash Attention for better throughput
+        # The Triton kernel uses FP16 QK+PV and outperforms rocwmma INT8/FP8 by 3-4x on RDNA
+        try:
+            from .triton.flash_attn_rdna4 import flash_attn_triton
+            if tensor_layout == "HND" and not return_lse and q.dtype == torch.float16:
+                if sm_scale is None:
+                    sm_scale = q.size(-1) ** -0.5
+                return flash_attn_triton(q, k, v, sm_scale=sm_scale, is_causal=is_causal)
+        except Exception:
+            pass  # fall through to rocwmma path
         return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
     elif arch == "sm80":
         return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")

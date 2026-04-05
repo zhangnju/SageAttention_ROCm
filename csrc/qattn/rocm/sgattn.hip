@@ -54,11 +54,14 @@
 
 using namespace rocwmma;
 
+// FP8 format selection:
+//   gfx942 (CDNA3, MI300X)  : FNUZ (fp8_e4m3_fnuz), MFMA = bf8_bf8, wave64
+//   gfx950 (CDNA4, MI355X)  : OCP  (fp8_e4m3),      MFMA = fp8_fp8, wave64
+//   gfx11xx/gfx12xx (RDNA)  : OCP  (fp8_e4m3),      MFMA = fp8_fp8, wave32
 #ifdef __ROCM_ARCH_GFX942
-  using fp8_type = __hip_fp8_e4m3_fnuz;
+  using fp8_type = __hip_fp8_e4m3_fnuz;  // FNUZ: rocwmma ROCWMMA_FP8_FNUZ path
 #else
-  // gfx11xx (RDNA3) and gfx12xx (RDNA4) both use e4m3
-  using fp8_type = __hip_fp8_e4m3;
+  using fp8_type = __hip_fp8_e4m3;       // OCP:  rocwmma ROCWMMA_FP8 path
 #endif
 
 constexpr float log2e = 1.44269504088896340736f;
@@ -66,10 +69,12 @@ constexpr float log2e_recp = 1.0f / log2e;
 #define div_ceil(M, N) (((M) + (N)-1) / (N))
 #define TRAP_IF(cond) do { if (cond) asm volatile("s_trap 0"); } while(0)
 
-#ifdef __ROCM_ARCH_GFX942
+// Wave size selection:
+//   gfx942 and gfx950 (CDNA3/CDNA4): wave64 -> gfx9Params (TBLOCK_X=256, WARP_SIZE=64)
+//   gfx11xx/gfx12xx   (RDNA3/RDNA4): wave32 -> gfx11Params (TBLOCK_X=128, WARP_SIZE=32)
+#if defined(__ROCM_ARCH_GFX942) || defined(__ROCM_ARCH_GFX950)
   using namespace gfx9Params;
 #else
-  // gfx11 and gfx12 (RDNA3/RDNA4) both use wave32
   using namespace gfx11Params;
 #endif
 

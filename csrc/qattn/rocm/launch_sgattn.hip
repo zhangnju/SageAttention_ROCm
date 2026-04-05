@@ -29,9 +29,15 @@
 #include "args.hpp"
 
 
+// gfx942 (CDNA3): FNUZ FP8, wave64
+// gfx950 (CDNA4): OCP  FP8, wave64  <-- rocwmma ROCWMMA_FP8 supports gfx950 with fp8_e4m3
+// gfx11xx/gfx12xx (RDNA): OCP FP8, wave32
 #ifdef __ROCM_ARCH_GFX942
   using fp8_type = __hip_fp8_e4m3_fnuz;
   namespace Params = gfx9Params;
+#elif defined(__ROCM_ARCH_GFX950)
+  using fp8_type = __hip_fp8_e4m3;    // OCP FP8 (ROCWMMA_FP8 path, wave64)
+  namespace Params = gfx9Params;      // CDNA4 = wave64, same tile params as CDNA3
 #else
   using fp8_type = __hip_fp8_e4m3;
   namespace Params = gfx11Params;
